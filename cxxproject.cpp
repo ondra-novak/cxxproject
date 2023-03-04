@@ -6,7 +6,6 @@
 #define CMAKE_HEADER "cmake_minimum_required(VERSION 3.1)\n"
 
 #define CMakeLists "CMakeLists.txt"
-static std::string lib_insert_point = "#---<INSERT POINT:LIBRARIES>---#";
 
 static std::filesystem::path src("src");
 static std::filesystem::path src_tests("src/tests");
@@ -18,17 +17,69 @@ static std::filesystem::path build_release = build/"release";
 
 static void install_makefile() {
     std::ofstream f("Makefile", std::ios::out|std::ios::trunc);
-    f << "all : all_debug all_release\n"
-         "all_debug:\n"
-         "\t$(MAKE) --no-print-directory -C build/debug all\n"
-         "all_release:\n"
-         "\t$(MAKE) --no-print-directory -C build/release all\n"
-         "clean:\n"
-         "\t$(MAKE) --no-print-directory -C build/debug clean\n"
-         "\t$(MAKE) --no-print-directory -C build/release clean\n"
-         "install:\n"
-         "\t$(MAKE) --no-print-directory -C build/release install\n";
+    f << "BUILD_PROFILE=default_build_profile.conf\n"
+"\n"
+"all : all_debug all_release\n"
+"all_debug: build/debug/Makefile\n"
+    "\t@$(MAKE) --no-print-directory -C build/debug all\n"
+"all_release: build/release/Makefile\n"
+    "\t@$(MAKE) --no-print-directory -C build/release all\n"
+"clean:"
+    "\t@$(MAKE) --no-print-directory -C build/debug clean\n"
+    "\t@$(MAKE) --no-print-directory -C build/release clean\n"
+"install:\n"
+    "\t@$(MAKE) --no-print-directory -C build/release install\n"
+"\n"
+"build/debug/Makefile:  $(BUILD_PROFILE) | build/debug/conf build/debug/log build/debug/data\n"
+    "\tmkdir -p build/debug/log\n"
+    "\tcmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug `grep -E -v \"^[[:blank:]]*#\" $(BUILD_PROFILE)`\n"
+"\n"
+"build/release/Makefile: $(BUILD_PROFILE) | build/release/conf build/release/log build/release/data\n"
+    "\tmkdir -p build/release/log\n"
+    "\tcmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release `grep -E -v \"^[[:blank:]]*#\" $(BUILD_PROFILE)`\n"
+"\n"
+"build/debug/conf: | build/debug conf \n"
+     "\tcd build/debug; ln -s ../../conf conf\n"
 
+"build/release/conf: | build/release conf \n"
+     "\tcd build/release; ln -s ../../conf conf\n"
+"\n"
+"build/debug/data: | build/debug data \n"
+     "\tcd build/debug; ln -s ../../data data\n"
+
+"build/release/data: | build/release data \n"
+     "\tcd build/release; ln -s ../../data data\n"
+"\n"
+"build/debug/log: | build/debug\n"
+     "\tmkdir build/debug/log\n"
+"\n"
+"build/release/log: | build/release\n"
+     "\tmkdir build/release/log\n"
+"\n"
+"build/debug:\n"
+    "\t@mkdir -p build/debug\n"
+"\n"
+"build/release:\n"
+    "\t@mkdir -p build/release\n"
+            "\n"
+"conf:\n"
+    "\t@mkdir -p conf\n"
+"\n"
+"data:\n"
+    "\t@mkdir -p data\n"
+"\n"
+"distclean:\n"
+    "\trm -rfv build\n";
+}
+
+static void install_default_build_profile() {
+    std::ofstream f("default_build_profile.conf", std::ios::out|std::ios::trunc);
+    f << "## type arguments for cmake here, each must start with -D\n"
+         "## -DVariable=Value\n"
+         "##\n"
+         "## Example: use compile 'clang++' \n"
+         "# -DCMAKE_CXX_COMPILER=clang++\n"
+         "\n";
 }
 
 static void install_gitignore() {
@@ -61,27 +112,26 @@ static void create_project_skeleton(std::string name, Spec spec) {
          "set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/)\n"
          "if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)\n"
          "\tset(CMAKE_INSTALL_PREFIX \"/usr/local\" CACHE PATH \"Default path to install\" FORCE)\n"
-         "endif()\n"
-         << lib_insert_point << " do not delete\n";
+         "endif()\n";
+
 
     create_directories(src);
     create_directories(src/name);
-    create_directories(conf);
-    create_directories(log);
-    create_directories(build_debug);
-    create_directories(build_release);
 
     spec(f);
 
     f.close();
 
     SYSTEM("git init");
-    SYSTEM("cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug");
-    SYSTEM("cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release");
 
     install_makefile();
     install_gitignore();
-    SYSTEM("git add src Makefile " CMakeLists " .gitignore");
+    install_default_build_profile();
+    SYSTEM("git add src Makefile " CMakeLists " .gitignore default_build_profile.conf");
+    std::cout << std::endl;
+    std::cout << "------------------" << std::endl;
+    std::cout << "DONE!" << std::endl;
+    std::cout << "Enter `make` to build the project " << name << "." << std::endl;
 
 
 }
@@ -222,9 +272,10 @@ static void insert_to_cmake(Fn &&fn) {
     std::ofstream out(fname_new, std::ios::out|std::ios::trunc);
 
     bool inserted = false;
+
     while (!in.eof()) {
         std::getline(in, ln);
-        if (ln.find(lib_insert_point) != ln.npos && !inserted) {
+        if (ln.find("add_subdirectory(") != ln.npos && !inserted) {
             inserted = true;
             fn(out);
         }
