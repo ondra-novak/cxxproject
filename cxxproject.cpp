@@ -98,7 +98,8 @@ static void install_default_build_profile() {
 
 static void install_gitignore() {
     std::ofstream f(".gitignore", std::ios::out|std::ios::trunc);
-    f << "/build\n" << std::endl;
+    f << "/build" << std::endl;
+    f << "/current_profile.mk" << std::endl;
 
 }
 
