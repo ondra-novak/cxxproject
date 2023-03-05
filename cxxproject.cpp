@@ -34,7 +34,7 @@ static void install_makefile() {
     "\t@$(MAKE) --no-print-directory -C build/debug all\n"
 "all_release: build/release/Makefile\n"
     "\t@$(MAKE) --no-print-directory -C build/release all\n"
-"clean:"
+"clean:\n"
     "\t@$(MAKE) --no-print-directory -C build/debug clean\n"
     "\t@$(MAKE) --no-print-directory -C build/release clean\n"
 "install:\n"
