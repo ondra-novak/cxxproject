@@ -21,8 +21,8 @@ static void install_makefile() {
 "ifdef BUILD_PROFILE\n"
     "\tFORCE_BUILD_PROFILE=__NOT_EXIST__\n"
 "else\n"
-    "\tFORCE_BUILD_PROFILE=current_profile.mk\n"
-    "\t-include current_profile.mk\n"
+    "\tFORCE_BUILD_PROFILE=.current_profile.mk\n"
+    "\t-include .current_profile.mk\n"
 "endif\n"
 "\n"
 "ifndef BUILD_PROFILE\n"
@@ -42,14 +42,18 @@ static void install_makefile() {
 "\n"
 "$(FORCE_BUILD_PROFILE):\n"
     "\techo $(FORCE_BUILD_PROFILE)\n"
-    "\t$(file >current_profile.mk,BUILD_PROFILE=$(BUILD_PROFILE))\n"
+    "\t$(file >.current_profile.mk,BUILD_PROFILE=$(BUILD_PROFILE))\n"
 "\n"
 "build/debug/Makefile:  $(BUILD_PROFILE) $(FORCE_BUILD_PROFILE) | build/debug/conf build/debug/log build/debug/data\n"
     "\tmkdir -p build/debug/log\n"
+            //this is necesary as the cmake regenerates cache with default build type
+    "\trm -f build/debug/CMakeCache.txt\n"
     "\tcmake -G \"Unix Makefiles\" -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug `grep -E -v \"^[[:blank:]]*#\" $(BUILD_PROFILE)`\n"
 "\n"
 "build/release/Makefile: $(BUILD_PROFILE) $(FORCE_BUILD_PROFILE) | build/release/conf build/release/log build/release/data\n"
     "\tmkdir -p build/release/log\n"
+            //this is necesary as the cmake regenerates cache with default build type
+    "\trm -f build/release/CMakeCache.txt\n"
     "\tcmake -G \"Unix Makefiles\" -S . -B build/release -DCMAKE_BUILD_TYPE=Release `grep -E -v \"^[[:blank:]]*#\" $(BUILD_PROFILE)`\n"
 "\n"
 "build/debug/conf: | build/debug conf \n"
@@ -99,7 +103,7 @@ static void install_default_build_profile() {
 static void install_gitignore() {
     std::ofstream f(".gitignore", std::ios::out|std::ios::trunc);
     f << "/build" << std::endl;
-    f << "/current_profile.mk" << std::endl;
+    f << "/.current_profile.mk" << std::endl;
 
 }
 
