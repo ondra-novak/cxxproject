@@ -39,6 +39,8 @@ static void install_makefile() {
     "\t@$(MAKE) --no-print-directory -C build/release clean\n"
 "install:\n"
     "\t@$(MAKE) --no-print-directory -C build/release install\n"
+"test:\n"
+    "\t@$(MAKE) --no-print-directory -C build/release test\n"
 "\n"
 "$(FORCE_BUILD_PROFILE):\n"
     "\techo $(FORCE_BUILD_PROFILE)\n"
@@ -179,13 +181,15 @@ static void create_main_header(std::string name, bool exec) {
         }
     }}
 
-static void create_test_source(std::string name) {
-    std::filesystem::path source = src_tests/"compile_test.cpp";
+static void create_test_source(std::string name, std::string test_dir) {
+    std::filesystem::path source = src/test_dir/"compile_test.cpp";
     if (!std::filesystem::exists(source)) {
         std::ofstream x(source, std::ios::out);
-        x << "#include <" << name << "/" << name << ".h>\n\nusing namespace "
-                << name
-                << ";\n\nint main(int argc, char **argv) {\n    return 0;\n}\n";
+        if (!name.empty()) {
+            x << "#include <" << name << "/" << name << ".h>\n\nusing namespace "
+                    << name << ";\n\n";
+        }
+        x << "#include <iostream>\n#include <cstdlib>\nint main(int argc, char **argv) {\n    return 0;\n}\n";
     }
 }
 
@@ -214,16 +218,30 @@ static void create_lib_cmake(std::string name) {
 
 }
 
-static void create_test_cmake(std::string name) {
-    std::string sublists = src_tests/CMakeLists;
+static void create_test_cmake(std::string name, std::string test_dir) {
+    std::string sublists = src/test_dir/CMakeLists;
     std::ofstream f(sublists, std::ios::out| std::ios::trunc);
     if (!f) {
         int e = errno;
         throw std::system_error(e, std::system_category(), "Failed to open "+sublists);
     }
     f << CMAKE_HEADER "\n";
-    f << "add_executable(compile_test compile_test.cpp)\n";
-    f << "target_link_libraries(compile_test\n\t" << name << "\n\tpthread\n)\n\n";
+    f << "set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/)\n"
+         "#file(GLOB testFiles \"*.cpp\")\n"
+         "set(testFiles \n"
+         "\tcompile_test.cpp\n"
+         ")\n\n"
+
+         "link_libraries(\n\t" << name << "\n\tpthread\n)\n\n"
+
+        "foreach (testFile ${testFiles})\n"
+            "\tstring(REGEX MATCH \"([^\\/]+$)\" filename ${testFile})\n"
+            "\tstring(REGEX MATCH \"[^.]*\" executable_name " << test_dir << "_${filename})\n"
+            "\tadd_executable(${executable_name} ${testFile})\n"
+            "\ttarget_link_libraries(${executable_name} pthread )\n"
+            "\tadd_test(NAME \"" << test_dir << "/${filename}\" COMMAND ${executable_name})\n"
+        "endforeach ()\n";
+
 
 }
 
@@ -238,6 +256,8 @@ static void create_library_dot_cmake(std::string name) {
 }
 
 static int create_exec(std::string name) {
+
+    if (name == "tests") throw std::runtime_error("Name 'tests' cannot be used");
 
 
     create_project_skeleton(name, [=](std::ostream &out){
@@ -261,13 +281,14 @@ static int create_lib(std::string name) {
     create_project_skeleton(name, [=](std::ostream &out){
 
         out << "include(library.cmake)\n";
+        out << "enable_testing()\n";
         out << "add_subdirectory(\"src/tests\")\n";
 
         create_directories(src_tests);
         create_main_source(name, false);
         create_main_header(name, false);
-        create_test_source(name);
-        create_test_cmake(name);
+        create_test_source(name, "tests");
+        create_test_cmake(name, "tests");
         create_library_dot_cmake(name);
         create_lib_cmake(name);
 
@@ -325,6 +346,45 @@ static int add_empty_lib(std::string name) {
     create_main_source(name, false);
     create_main_header(name, false);
     create_lib_cmake(name);
+
+    SYSTEM(("git add "+p).c_str());
+    return 0;
+}
+
+static int add_empty_exec(std::string name) {
+    using namespace std::filesystem;
+    auto path = src/name;
+    if (exists(path)) {
+        throw std::runtime_error("already exists");
+    }
+    std::string p = path;
+
+    insert_to_cmake([&](std::ostream &out){
+        out << "add_subdirectory(\""<< p << "\")\n";
+    });
+    create_directories(path);
+    create_main_source(name, true);
+    create_main_header(name, true);
+    create_exec_cmake(name);
+
+    SYSTEM(("git add "+p).c_str());
+    return 0;
+}
+
+static int add_tests(std::string name) {
+    using namespace std::filesystem;
+    auto path = src/name;
+    if (exists(path)) {
+        throw std::runtime_error("already exists");
+    }
+    std::string p = path;
+
+    insert_to_cmake([&](std::ostream &out){
+        out << "add_subdirectory(\""<< p << "\")\n";
+    });
+    create_directories(path);
+    create_test_source("", name);
+    create_test_cmake("",name);
 
     SYSTEM(("git add "+p).c_str());
     return 0;
@@ -401,6 +461,12 @@ int main(int argc, char **argv) {
                     } else {
                         return add_empty_lib(std::string(arg3));
                     }
+                }
+                if (arg2 == "executable") {
+                    return add_empty_exec(std::string(arg3));
+                }
+                if (arg2 == "tests") {
+                    return add_tests(std::string(arg3));
                 }
             }
         }
