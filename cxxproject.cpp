@@ -431,7 +431,9 @@ int main(int argc, char **argv) {
                     "add library <name> <gitpath>    add library from git\n"
                     "add library <name> <gitpath> <branch>\n"
                     "                                add library from git - branch\n"
-                    "                (automatically includes library.cmake if exists)\n";
+                    "                (automatically includes library.cmake if exists)\n"
+                    "add executable <name>           add new executable\n"
+                    "add tests <name>                add new test directory\n";
             return 0;
         }
         if (arg1 == "create") {
