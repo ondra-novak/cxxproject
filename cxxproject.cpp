@@ -2,6 +2,11 @@
 #include <fstream>
 #include <string_view>
 #include <filesystem>
+#include <locale>
+#include <random>
+#include <algorithm>
+
+using std::__cxx11::collate;
 
 #define CMAKE_HEADER "cmake_minimum_required(VERSION 3.1)\n"
 
@@ -10,7 +15,7 @@
 static std::filesystem::path src("src");
 static std::filesystem::path src_tests("src/tests");
 static std::filesystem::path conf("conf");
-static std::filesystem::path log("log");
+static std::filesystem::path log_path("log");
 static std::filesystem::path build("build");
 static std::filesystem::path build_debug = build/"debug";
 static std::filesystem::path build_release = build/"release";
@@ -109,6 +114,55 @@ static void install_gitignore() {
 
 }
 
+
+static void version_build_files(std::string name) {
+    std::string capname;
+    std::transform(name.begin(), name.end(), std::back_inserter(capname), toupper);
+    std::filesystem::create_directories("version");
+    std::ofstream cmake("version/CMakeLists.txt", std::ios::out|std::ios::trunc);
+    cmake << "add_custom_target(" << name << "_version\n";
+    cmake <<"    ${CMAKE_COMMAND} -D SRC=${CMAKE_SOURCE_DIR}/version/version.h.in\n";
+    cmake <<"          -D DST=${CMAKE_BINARY_DIR}/src/" << name << "_version.h\n";
+    cmake <<"          -D ROOT=${CMAKE_SOURCE_DIR}\n";
+    cmake <<"          -D GIT_EXECUTABLE=${GIT_EXECUTABLE}\n";
+    cmake <<"          -P ${CMAKE_CURRENT_LIST_DIR}/GenerateVersionHeader.cmake\n";
+    cmake <<"          )\n";
+    cmake.close();
+
+    std::ofstream gen("version/GenerateVersionHeader.cmake", std::ios::out|std::ios::trunc);
+    gen << "if(GIT_EXECUTABLE)\n";
+    gen << "  get_filename_component(SRC_DIR ${SRC} DIRECTORY)\n";
+    gen << "  # Generate a git-describe version string from Git repository tags\n";
+    gen << "  execute_process(\n";
+    gen << "    COMMAND ${GIT_EXECUTABLE} describe --tags --always\n";
+    gen << "    WORKING_DIRECTORY ${SRC_DIR}\n";
+    gen << "    OUTPUT_VARIABLE GIT_DESCRIBE_VERSION\n";
+    gen << "    RESULT_VARIABLE GIT_DESCRIBE_ERROR_CODE\n";
+    gen << "    OUTPUT_STRIP_TRAILING_WHITESPACE\n";
+    gen << "    )\n";
+    gen << "  if(NOT GIT_DESCRIBE_ERROR_CODE)\n";
+    gen << "    set(PROJECT_VERSION ${GIT_DESCRIBE_VERSION})\n";
+    gen << "  endif()\n";
+    gen << "endif()\n";
+    gen << "\n";
+    gen << "# Final fallback: Just use a bogus version string that is semantically older\n";
+    gen << "# than anything else and spit out a warning to the developer.\n";
+    gen << "if(NOT DEFINED PROJECT_VERSION)\n";
+    gen << "  set(PROJECT_VERSION v0.0.0-unknown)\n";
+    gen << "  message(WARNING \"Failed to determine version from Git tags. Using default version \\\"${PROJECT_VERSION}\\\".\")\n";
+    gen << "endif()\n";
+    gen << "\n";
+    gen << "configure_file(${SRC} ${DST} @ONLY)\n";
+
+    gen.close();
+
+
+    std::ofstream hdr("version/version.h.in", std::ios::out|std::ios::trunc);
+    hdr << "#define PROJECT_" << capname << "_VERSION \"@PROJECT_VERSION@\"" << std::endl;
+    hdr.close();
+}
+
+
 #define SYSTEM(X) do { int r = system((X)); if (r) throw std::system_error(r, std::system_category(), #X); } while(false)
 
 template<typename Spec>
@@ -126,20 +180,33 @@ static void create_project_skeleton(std::string name, Spec spec) {
     f << CMAKE_HEADER
          "project (" << name <<  ")\n"
          "set (CMAKE_CXX_STANDARD 20)\n"
+         "if (MSVC)\n"
+         "\tadd_compile_options(/W4 /EHsc /DNOMINMAX    )\n"
+         "\tset(STANDARD_LIBRARIES \"\")\n"
+         "else()\n"
+         "\tadd_compile_options(-Wall -Wextra -Wpedantic)\n"
+         "\tset(STANDARD_LIBRARIES \"pthread\")\n"
+         "endif()\n"
          "add_compile_options(-Wall -Wno-noexcept-type)\n"
-         "exec_program(\"git submodule update --init\")\n"
+         "find_package(Git)\n"
+         "if(GIT_EXECUTABLE)\n"
+         "\texecute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})\n"
+         "endif()\n"
          "set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/)\n"
          "set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/)\n"
          "set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/)\n"
          "if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)\n"
          "\tset(CMAKE_INSTALL_PREFIX \"/usr/local\" CACHE PATH \"Default path to install\" FORCE)\n"
-         "endif()\n";
+         "endif()\n"
+         "include_directories(BEFORE ${CMAKE_BINARY_DIR}/src)\n";
 
 
     create_directories(src);
     create_directories(src/name);
 
     spec(f);
+
+    f << "add_subdirectory(\"version\")\n";
 
     f.close();
 
@@ -149,6 +216,8 @@ static void create_project_skeleton(std::string name, Spec spec) {
     install_gitignore();
     install_default_build_profile();
     SYSTEM("git add src Makefile " CMakeLists " .gitignore default_build_profile.conf");
+    SYSTEM("git commit -m 'Project creation'");
+    SYSTEM("git tag 0.0.1");
     std::cout << std::endl;
     std::cout << "------------------" << std::endl;
     std::cout << "DONE!" << std::endl;
@@ -157,18 +226,45 @@ static void create_project_skeleton(std::string name, Spec spec) {
 
 }
 
-static void create_main_source(std::string name, bool exec) {
+static void create_main_source(std::string name, bool exec, bool header) {
+
+    std::string capname;
+    std::transform(name.begin(), name.end(), std::back_inserter(capname), toupper);
+
     std::filesystem::path source = src/name/name;
     source.replace_extension("cpp");
     if (!std::filesystem::exists(source)) {
         std::ofstream x(source, std::ios::out);
         x << "#include \"" << name << ".h\"\n\n";
+        if (header) {
+            x << "#include <" << name << "_version.h>\n";
+        }
         if (exec) {
-            x << "int main(int argc, char **argv) {\n    return 0;\n}\n";
+            x << "#include <iostream>\n#include <cstdlib>\n\n";
+            x << "int main(int argc, char **argv) {\n    std::cout << \"Version: \" << PROJECT_" << capname << "_VERSION << std::endl;\n    return 0;\n}\n";
         } else {
             x << "namespace " << name << "{\n\n}\n";
         }
     }
+}
+
+static std::string generate_guard(std::string name) {
+
+    std::random_device rnd_src;
+    std::default_random_engine rnd(rnd_src());
+    std::uniform_int_distribution<> rdist(0,2*20+10);
+
+    std::string out = "_"+name+"_src_"+name+"_H_";
+    for (int i = 0; i < 32; i++) {
+        int v = rdist(rnd);
+        char c;
+        if (v < 10) c = '0'+v;
+        else if (v < 30) c = 'A'+(v-10);
+        else c = 'a' + (v-30);
+        out.push_back(c);
+    }
+    out.push_back('_');
+    return out;
 }
 
 static void create_main_header(std::string name, bool exec) {
@@ -176,9 +272,14 @@ static void create_main_header(std::string name, bool exec) {
     source.replace_extension("h");
     if (!std::filesystem::exists(source)) {
         std::ofstream x(source, std::ios::out);
+        std::string guard = generate_guard(name);
+        x << "#pragma once\n";
+        x << "#ifndef " << guard << "\n";
+        x << "#define " << guard << "\n\n";
         if (!exec) {
-            x << "namespace " << name << "{\n\n}\n";
+            x << "namespace " << name << "{\n\n}\n\n";
         }
+        x << "#endif /* " << guard << " */\n";
     }}
 
 static void create_test_source(std::string name, std::string test_dir) {
@@ -186,14 +287,17 @@ static void create_test_source(std::string name, std::string test_dir) {
     if (!std::filesystem::exists(source)) {
         std::ofstream x(source, std::ios::out);
         if (!name.empty()) {
-            x << "#include <" << name << "/" << name << ".h>\n\nusing namespace "
-                    << name << ";\n\n";
+            x << "#include <" << name << "/" << name << ".h>\n\n";
         }
-        x << "#include <iostream>\n#include <cstdlib>\nint main(int argc, char **argv) {\n    return 0;\n}\n";
+        x << "#include <iostream>\n#include <cstdlib>\n\n";
+        if (!name.empty()) {
+            x <<"using namespace " << name << ";\n\n";
+        }
+        x << "int main(int argc, char **argv) {\n    return 0;\n}\n";
     }
 }
 
-static void create_exec_cmake(std::string name) {
+static void create_exec_cmake(std::string name, bool version) {
     std::string sublists = src/name/CMakeLists;
     std::ofstream f(sublists, std::ios::out| std::ios::trunc);
     if (!f) {
@@ -202,11 +306,13 @@ static void create_exec_cmake(std::string name) {
     }
     f <<  CMAKE_HEADER "\n";
     f << "add_executable(" << name << "\n\t" << name << ".cpp\n)\n\n";
-    f << "target_link_libraries(" << name << "\n\tpthread\n)\n\n";
+    f << "target_link_libraries(" << name << "\n\t${STANDARD_LIBRARIES}\n)\n";
+    if (version)
+        f << "add_dependencies(" << name << " " << name << "_version)\n\n";
 
 }
 
-static void create_lib_cmake(std::string name) {
+static void create_lib_cmake(std::string name, bool version) {
     std::string sublists = src/name/CMakeLists;
     std::ofstream f(sublists, std::ios::out| std::ios::trunc);
     if (!f) {
@@ -214,7 +320,9 @@ static void create_lib_cmake(std::string name) {
         throw std::system_error(e, std::system_category(), "Failed to open "+sublists);
     }
     f << CMAKE_HEADER "\n";
-    f << "add_library(" << name << "\n\t" << name << ".cpp\n)\n\n";
+    f << "add_library(" << name << "\n\t" << name << ".cpp\n)\n";
+    if (version)
+        f << "add_dependencies(" << name << " " << name << "_version)\n\n";
 
 }
 
@@ -232,13 +340,13 @@ static void create_test_cmake(std::string name, std::string test_dir) {
          "\tcompile_test.cpp\n"
          ")\n\n"
 
-         "link_libraries(\n\t" << name << "\n\tpthread\n)\n\n"
+         "link_libraries(\n\t" << name << "\n\t${STANDARD_LIBRARIES}\n)\n\n"
 
         "foreach (testFile ${testFiles})\n"
             "\tstring(REGEX MATCH \"([^\\/]+$)\" filename ${testFile})\n"
             "\tstring(REGEX MATCH \"[^.]*\" executable_name " << test_dir << "_${filename})\n"
             "\tadd_executable(${executable_name} ${testFile})\n"
-            "\ttarget_link_libraries(${executable_name} pthread )\n"
+            "\ttarget_link_libraries(${executable_name} ${STANDARD_LIBRARIES} )\n"
             "\tadd_test(NAME \"" << test_dir << "/${filename}\" COMMAND ${executable_name})\n"
         "endforeach ()\n";
 
@@ -265,9 +373,10 @@ static int create_exec(std::string name) {
         out << "include_directories(AFTER src)\n";
         out << "add_subdirectory(\"src/" << name << "\")\n";
 
-        create_main_source(name, true);
+        version_build_files(name);
+        create_main_source(name, true, true);
         create_main_header(name, true);
-        create_exec_cmake(name);
+        create_exec_cmake(name, true);
 
 
     });
@@ -284,13 +393,14 @@ static int create_lib(std::string name) {
         out << "enable_testing()\n";
         out << "add_subdirectory(\"src/tests\")\n";
 
+        version_build_files(name);
         create_directories(src_tests);
-        create_main_source(name, false);
+        create_main_source(name, false, true);
         create_main_header(name, false);
         create_test_source(name, "tests");
         create_test_cmake(name, "tests");
         create_library_dot_cmake(name);
-        create_lib_cmake(name);
+        create_lib_cmake(name,true);
 
 
     });
@@ -343,9 +453,9 @@ static int add_empty_lib(std::string name) {
         out << "add_subdirectory(\""<< p << "\")\n";
     });
     create_directories(path);
-    create_main_source(name, false);
+    create_main_source(name, false, false);
     create_main_header(name, false);
-    create_lib_cmake(name);
+    create_lib_cmake(name,false);
 
     SYSTEM(("git add "+p).c_str());
     return 0;
@@ -363,9 +473,9 @@ static int add_empty_exec(std::string name) {
         out << "add_subdirectory(\""<< p << "\")\n";
     });
     create_directories(path);
-    create_main_source(name, true);
+    create_main_source(name, true, false);
     create_main_header(name, true);
-    create_exec_cmake(name);
+    create_exec_cmake(name,false);
 
     SYSTEM(("git add "+p).c_str());
     return 0;
